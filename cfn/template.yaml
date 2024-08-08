@@ -117,7 +117,7 @@ Resources:
       Environment:
         Variables:
           Environment: !Ref Environment
-          KB_ID: ""
+          KB_ID: !Ref AiChatKnowledgeBaseCollection
 
   GetKBDataLambdaFunctionExecutionRole:
     Type: 'AWS::IAM::Role'
@@ -240,6 +240,9 @@ Resources:
                   - 'es:ESHttpPost'
                   - 'es:ESHttpPut'
                 Resource: '*'
+              - Effect: Allow
+                Action: 'aoss:*'                  
+                Resource: '*'
 
   # Setup Vector Index as per: https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
   CreateVectorIndexFunction:
@@ -264,12 +267,12 @@ Resources:
     Type: 'Custom::CreateVectorIndex'
     Properties:
       ServiceToken: !GetAtt CreateVectorIndexFunction.Arn
-      CollectionName: aichat-kb-collection
-      EsEndpoint: !GetAtt AiChatKnowledgeBaseCollection.CollectionEndpoint
+      # CollectionName: aichat-kb-collection
+      # EsEndpoint: !GetAtt AiChatKnowledgeBaseCollection.CollectionEndpoint
+      # VectorField: embeddings
+      # TextField: text
+      # MetadataField: metadata
       IndexName: ai-index
-      VectorField: embeddings
-      TextField: text
-      MetadataField: metadata
       IndexMapping: >
         {
           "settings": {
@@ -280,7 +283,7 @@ Resources:
           },
           "mappings": {
             "properties": {
-              "<vector field name>": {
+              "ai-vector-field": {
                 "type": "knn_vector",
                 "dimension": 1536,
                 "method": {
@@ -294,7 +297,7 @@ Resources:
                 "type": "text",
                 "index": "true"
               },
-              "<Mapping field-2>": {
+              "bedrock-metadata": {
                 "type": "text",
                 "index": "true"
               }

@@ -96,7 +96,6 @@ func (svc *OpenSearchService) setup(event cfn.Event) error {
 
 	svc.IndexName = event.ResourceProperties["IndexName"].(string)
 	svc.IndexMapping = event.ResourceProperties["IndexMapping"].(string)
-	svc.OpenSearchEndpoint = event.ResourceProperties["OpenSearchEndpoint"].(string)
 
 	return nil
 }
