@@ -1,0 +1,305 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AI POC - Model 2.
+
+Parameters:
+  Environment:
+    Type: String
+    Description: The runtime environment of this stack
+  MapBurstLimit:
+    Type: Number
+    Default: 700
+  MapRateLimit:
+    Type: Number
+    Default: 3000
+  MapThrottlingLimit:
+    Type: Number
+    Default: 10000
+  MapThrottlingBurstLimit:
+    Type: Number
+    Default: 5000  
+
+
+Resources:
+
+
+# API Gateway Resources 
+
+  GatewayApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      OpenApiVersion: '2.0'
+      EndpointConfiguration:
+        Type: REGIONAL
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: '../swagger/api-doc.yaml'
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          DataTraceEnabled: true
+          LoggingLevel: INFO
+          MetricsEnabled: true
+          ThrottlingRateLimit: !Ref MapThrottlingLimit
+          ThrottlingBurstLimit: !Ref MapThrottlingBurstLimit
+      Auth:
+        ApiKeyRequired: true
+      TracingEnabled: true
+
+  # -------------------------
+  # Creating GatewayApi UsagePlan and GatewayApi API Key resources explicitly to enforce same
+  # API key value for every deployment.
+  # -------------------------
+
+  GatewayApiUsagePlan:
+    Type: 'AWS::ApiGateway::UsagePlan'
+    # Adding GatewayApiStage in order to create UsagePlan after stage is created
+    # referring to GatewayApiStage (<api-name>Stage) which is the default name creation for stage in AWS
+    DependsOn:
+      - GatewayApiStage
+    Properties:
+      ApiStages:
+        - ApiId: !Ref GatewayApi
+          Stage: !Ref Environment
+      Description: Usage plan for this API
+      # Update throttle settings based on env
+      Throttle:
+        RateLimit: !Ref MapBurstLimit
+        BurstLimit: !Ref MapRateLimit
+
+  GatewayApiUsagePlanKey:
+    Type: 'AWS::ApiGateway::UsagePlanKey'
+    Properties:
+      KeyId: !Ref GatewayApiApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref GatewayApiUsagePlan
+
+  GatewayApiApiKey:
+    Type: 'AWS::ApiGateway::ApiKey'
+    DependsOn:
+      - GatewayApiUsagePlan
+      - GatewayApiStage
+    Properties:
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref GatewayApi
+          StageName: !Ref Environment
+      # SSM parameter holds the value of API key for uat/prod, secret manager for other environments
+      #Value: !If [IsTestBuild, !Join ['', ['{{resolve:secretsmanager:', !Ref generatesecretkey, ':SecretString:apikey}}']],'{{resolve:ssm:/ai-poc/api-key}}']
+
+  # generatesecretkey:
+  #   Type: AWS::SecretsManager::Secret
+  #   Properties:
+  #     Name: !Sub SecretKeyForApi/${Environment}
+  #     GenerateSecretString:
+  #       SecretStringTemplate: '{"username": "getapikey"}'
+  #       ExcludePunctuation: true
+  #       GenerateStringKey: 'apikey'
+  #       PasswordLength: 21
+
+
+# Get KB Data Lambda function
+  GetKBDataLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: "Lambda for get answers from KB"
+      Role: !GetAtt GetKBDataLambdaFunctionExecutionRole.Arn
+      Handler: bootstrap
+      Runtime: provided.al2
+      Architectures:
+        - x86_64
+      Timeout: 300
+      CodeUri: ../lambdas/kb-data-ai/
+      Tracing: Active
+      Environment:
+        Variables:
+          Environment: !Ref Environment
+          KB_ID: ""
+
+  GetKBDataLambdaFunctionExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: "*"     
+
+  GetKBDataLambdaFunctionInvokePermissions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt GetKBDataLambda.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${GatewayApi}/*
+
+  #-------------
+
+  IAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: aossadmin-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'opensearchservice.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: OpenSearchAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'aoss:*'
+                Resource: '*'
+  
+  AiChatKnowledgeBaseCollection:
+    Type: 'AWS::OpenSearchServerless::Collection'
+    Properties:
+      Name: aichat-kb-collection
+      Type: VECTORSEARCH
+      Description: Search collection
+    DependsOn: 
+      - SecurityEncryptionPolicy
+      - SecurityNetworkPolicy
+  
+  SecurityEncryptionPolicy:
+    Type: 'AWS::OpenSearchServerless::SecurityPolicy'
+    Properties:
+      Name: logs-encryption-policy
+      Type: encryption
+      Description: Encryption policy for test collections
+      Policy: >-
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/aichat-kb-collection*"]}],"AWSOwnedKey":true}
+
+  SecurityNetworkPolicy:
+    Type: 'AWS::OpenSearchServerless::SecurityPolicy'
+    Properties:
+      Name: logs-network-policy
+      Type: network
+      Description: Network policy for test collections
+      Policy: >-
+        [{"Rules":[{"ResourceType":"collection","Resource":["collection/aichat-kb-collection*"]},
+        {"ResourceType":"dashboard","Resource":["collection/aichat-kb-collection*"]}],"AllowFromPublic":true}]      
+
+  DataAccessPolicy:
+    Type: 'AWS::OpenSearchServerless::AccessPolicy'
+    Properties:
+      Name: access-policy
+      Type: data
+      Description: Access policy for open search collection
+      Policy: !Sub >-
+        [{"Description":"Access for cfn role","Rules":[{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]},
+        {"ResourceType":"collection","Resource":["collection/aichat-kb-collection"],"Permission":["aoss:*"]}],
+        "Principal":["arn:aws:iam::${AWS::AccountId}:role/aossadmin-role", "arn:aws:iam::${AWS::AccountId}:role/docchat-knowledge-base-role-${Environment}"]}]
+
+# Custom Resource to create Vector Index. Index is required for the Bedrock configurations
+  CreateVectorIndexFunctionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CreateVectorIndexPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'es:ESHttpPost'
+                  - 'es:ESHttpPut'
+                Resource: '*'
+
+  # Setup Vector Index as per: https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
+  CreateVectorIndexFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: "Lambda for get answers from KB"
+      Role: !GetAtt GetKBDataLambdaFunctionExecutionRole.Arn
+      Handler: bootstrap
+      Runtime: provided.al2
+      Architectures:
+        - x86_64
+      Timeout: 300
+      CodeUri: ../lambdas/create-vector-index/
+      Tracing: Active
+      Environment:
+        Variables:
+          Environment: !Ref Environment
+          OPEN_SEARCH_ENDPOINT: !GetAtt AiChatKnowledgeBaseCollection.CollectionEndpoint
+  
+  # Ref: https://repost.aws/knowledge-center/bedrock-knowledge-base-private-network-policy
+  CreateVectorIndex:
+    Type: 'Custom::CreateVectorIndex'
+    Properties:
+      ServiceToken: !GetAtt CreateVectorIndexFunction.Arn
+      CollectionName: aichat-kb-collection
+      EsEndpoint: !GetAtt AiChatKnowledgeBaseCollection.CollectionEndpoint
+      IndexName: ai-index
+      VectorField: embeddings
+      TextField: text
+      MetadataField: metadata
+      IndexMapping: >
+        {
+          "settings": {
+            "index": {
+              "knn": true,
+              "knn.algo_param.ef_search": 512
+            }
+          },
+          "mappings": {
+            "properties": {
+              "<vector field name>": {
+                "type": "knn_vector",
+                "dimension": 1536,
+                "method": {
+                  "name": "hnsw",
+                  "engine": "faiss",
+                  "parameters": {},
+                  "space_type": "l2"
+                }
+              },
+              "text": {
+                "type": "text",
+                "index": "true"
+              },
+              "<Mapping field-2>": {
+                "type": "text",
+                "index": "true"
+              }
+            }
+          }
+        }
+
+

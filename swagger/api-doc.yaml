@@ -1,0 +1,34 @@
+swagger: "2.0"
+info:
+  title:
+    Fn::Sub: ${AWS::StackName}
+  description: AI POC 2 API
+  version: 1.0.3
+x-amazon-apigateway-request-validators:
+  all:
+    validateRequestBody: true
+x-amazon-apigateway-request-validator: all
+paths:
+  /kb-data-ai:
+    post:
+      x-amazon-apigateway-integration:
+        httpMethod: POST
+        passthroughBehavior: when_no_match
+        type: aws_proxy
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetKBDataLambda.Arn}/invocations
+        responses:
+          default:
+            statusCode: '200'
+      summary: Jira Tasks
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      security:
+        - api_key: []
+securityDefinitions:
+  api_key:
+    type: "apiKey"
+    name: "x-api-key"
+    in: "header"
