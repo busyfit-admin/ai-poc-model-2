@@ -9,6 +9,25 @@ x-amazon-apigateway-request-validators:
     validateRequestBody: true
 x-amazon-apigateway-request-validator: all
 paths:
+  /v1/upload-aichat-data:
+    post:
+      summary: Upload Chat file to S3 Bucket for AI chatting
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      x-amazon-apigateway-integration:
+        type: AWS_PROXY
+        httpMethod: POST
+        passthroughBehavior: WHEN_NO_MATCH
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadDocumentToChatLambda.Arn}/invocations
+        responses:
+          default:
+            statusCode: "200"
+      security:
+        - UserPool: []
+        
   /kb-data-ai:
     post:
       x-amazon-apigateway-integration:
