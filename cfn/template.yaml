@@ -151,7 +151,7 @@ Resources:
       Handler: "docaichat-data-uploads.lambda_handler"
       Runtime: python3.11
       Timeout: 300
-      CodeUri: ../../lambdas/docaichat-data-uploads/
+      CodeUri: ../lambdas/docaichat-data-uploads/
       Environment:
         Variables:
           Environment: !Ref Environment
