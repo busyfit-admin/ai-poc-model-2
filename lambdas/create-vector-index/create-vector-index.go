@@ -104,6 +104,8 @@ func (svc *OpenSearchService) CreateIndex() (string, map[string]interface{}, err
 
 	response := make(map[string]interface{})
 	// Create an index with non-default settings.
+	svc.logger.Printf("Creating index: %v", svc.IndexName)
+	svc.logger.Printf("Mapping: %v", svc.IndexMapping)
 	createResp, err := svc.openSearchClient.Indices.Create(
 		svc.ctx,
 		opensearchapi.IndicesCreateReq{

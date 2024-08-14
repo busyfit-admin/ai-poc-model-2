@@ -19,7 +19,6 @@ Parameters:
     Type: Number
     Default: 5000  
 
-
 Resources:
 
 
@@ -100,6 +99,94 @@ Resources:
   #       GenerateStringKey: 'apikey'
   #       PasswordLength: 21
 
+# ---------- IAM Role for S3 Bucket ----------
+
+  DocGenerativeTextChatIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub document-generative-chat-${Environment}
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - s3.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Description: IAM Role for S3 Bucket
+      Policies:
+        - PolicyName: DocGenerativeTextChatIAMRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::daas-docgenerative-chat-data-files-${Environment}/*
+
+#---------------S3 Bucket for storing AiChat-docs----------------------
+
+  AiDocumentChatBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub daas-docgenerative-chat-data-files-${Environment}
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteAfter30Days
+            Status: Enabled
+            ExpirationInDays: 30
+
+#-----------Lambda for Uploading the document to chat-------------------
+
+  UploadDocumentToChatLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Lambda to drop csv file from Front end to S3 bucket 
+      Role: !GetAtt UploadDocumentToChatLambdaRole.Arn
+      Handler: "docaichat-data-uploads.lambda_handler"
+      Runtime: python3.11
+      Timeout: 300
+      CodeUri: ../lambdas/docaichat-data-uploads/
+      Environment:
+        Variables:
+          Environment: !Ref Environment
+          AICHAT_DATA_UPLOAD_BUCKET: !Ref AiDocumentChatBucket
+  
+  UploadDocumentToChatLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub UploadDocument-lambda-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecution
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:getObject
+                  - s3:putObject
+                Resource:
+                  - !Sub arn:aws:s3:::daas-docgenerative-chat-data-files-${Environment}/*
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
 
 # Get KB Data Lambda function
   GetKBDataLambda:
@@ -215,14 +302,34 @@ Resources:
       Type: data
       Description: Access policy for open search collection
       Policy: !Sub >-
-        [{"Description":"Access for cfn role","Rules":[{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]},
-        {"ResourceType":"collection","Resource":["collection/aichat-kb-collection"],"Permission":["aoss:*"]}],
-        "Principal":["arn:aws:iam::${AWS::AccountId}:role/aossadmin-role", "arn:aws:iam::${AWS::AccountId}:role/docchat-knowledge-base-role-${Environment}"]}]
+        [
+          {
+            "Description": "Access for cfn role",
+            "Rules": [
+              {
+                "ResourceType": "index",
+                "Resource": ["index/*/*"],
+                "Permission": ["aoss:*"]
+              },
+              {
+                "ResourceType": "collection",
+                "Resource": ["collection/aichat-kb-collection"],
+                "Permission": ["aoss:*"]
+              }
+            ],
+            "Principal": [
+              "arn:aws:iam::${AWS::AccountId}:role/aossadmin-role",
+              "arn:aws:iam::${AWS::AccountId}:role/docchat-knowledge-base-role-${Environment}"
+            ]
+          }
+        ]
+
 
 # Custom Resource to create Vector Index. Index is required for the Bedrock configurations
   CreateVectorIndexFunctionRole:
     Type: 'AWS::IAM::Role'
     Properties:
+      RoleName: !Sub docchat-knowledge-base-role-${Environment}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -239,6 +346,14 @@ Resources:
                 Action:
                   - 'es:ESHttpPost'
                   - 'es:ESHttpPut'
+                  - "es:CreateIndex"
+                  - "aoss:ReadDocument"
+                  - "aoss:WriteDocument"
+                  - "aoss:CreateIndex"
+                  - "aoss:DeleteIndex"
+                  - "aoss:UpdateIndex"
+                  - "aoss:DescribeIndex"
+                  - "aoss:*"
                 Resource: '*'
               - Effect: Allow
                 Action: 'aoss:*'                  
@@ -248,8 +363,8 @@ Resources:
   CreateVectorIndexFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Description: "Lambda for get answers from KB"
-      Role: !GetAtt GetKBDataLambdaFunctionExecutionRole.Arn
+      Description: "Lambda for creating the vector index"
+      Role: !GetAtt CreateVectorIndexFunctionRole.Arn
       Handler: bootstrap
       Runtime: provided.al2
       Architectures:
